@@ -1,4 +1,6 @@
 import type { SeatbeltConfig } from '../config.js';
+import type { Violation, RuleScope } from '../types/index.js';
+import { CombinedRuleScope } from './rule-scope.js';
 
 /**
  * Builds the system prompt based on current mode and configuration.
@@ -7,7 +9,10 @@ import type { SeatbeltConfig } from '../config.js';
 export function buildSystemPrompt(
   inCorrection: boolean, 
   allowedFiles: string[], 
-  config?: Required<SeatbeltConfig>
+  config?: Required<SeatbeltConfig>,
+  violations: Violation[] = [],
+  repairScope?: string[],
+  ruleScope?: RuleScope
 ): string {
   const strictness = config?.prompt?.strictness ?? 'default';
   const rules = config?.rules ?? { smallFocusedChanges: true, avoidGodFiles: true, highRiskAccretion: true };
@@ -51,11 +56,45 @@ ${allPrinciples.map(p => `- ${p}`).join('\n')}
 When in doubt, make a smaller change than you think is necessary.`;
 
   if (inCorrection) {
+    // Determine active rule groups.
+    // Priority: explicit RuleScope > repairScope (for transition) > global config.rules
+    let activeRules: string[];
+    if (ruleScope) {
+      activeRules = ['smallFocusedChanges', 'avoidGodFiles', 'highRiskAccretion'].filter(g => 
+        ruleScope.isActive(g as any)
+      );
+    } else if (repairScope && repairScope.length > 0) {
+      activeRules = repairScope;
+    } else {
+      activeRules = config?.rules 
+        ? Object.entries(config.rules)
+            .filter(([, enabled]) => enabled !== false)
+            .map(([name]) => name)
+        : ['smallFocusedChanges', 'avoidGodFiles', 'highRiskAccretion'];
+    }
+
+    let ruleContext = '';
+    if (activeRules.length > 0) {
+      ruleContext = `\n\nTARGETED REPAIR CONTEXT:\nYou are performing a repair pass for the following active rule groups only:\n${activeRules.map(r => `- ${r}`).join('\n')}\n\nYou must ONLY address violations that belong to these groups.`;
+    }
+
+    let violationSection = '';
+    if (violations.length > 0) {
+      const violationList = violations
+        .map((v, i) => `${i + 1}. [${v.ruleId}] ${v.message}`)
+        .join('\n');
+      violationSection = `\n\nSPECIFIC VIOLATIONS TO FIX (filtered to active rules):\n${violationList}`;
+    }
+
+    const fixInstruction = violations.length > 0 
+      ? 'You MUST ONLY fix the violations listed above.'
+      : 'You MUST ONLY fix the following violations.';
+
     return `${baseRules}
 
-You are currently in STRICT CORRECTION MODE.
+You are currently in STRICT CORRECTION MODE (targeted repair).${ruleContext}${violationSection}
 
-You MUST ONLY fix the following violations. Do not add new features or make unrelated improvements.
+${fixInstruction} Do not add new features or make unrelated improvements.
 
 RESTRICTIONS:
 - You may ONLY use the 'edit' tool.

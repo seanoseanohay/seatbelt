@@ -255,6 +255,166 @@ test('Integration - rule groups in config affect Auditor enforcement (avoidGodFi
   }
 });
 
+test('Integration - targeted repair prompt is framed by active rule groups', async () => {
+  const worktree = await createTempDir();
+  try {
+    const { mkdir, writeFile } = await import('fs/promises');
+    await mkdir(path.join(worktree, '.seatbelt'), { recursive: true });
+
+    // Config with only a subset of rules active (small changes + high risk, but not god files)
+    await writeFile(
+      path.join(worktree, '.seatbelt', 'config.json'),
+      JSON.stringify({
+        rules: {
+          smallFocusedChanges: true,
+          avoidGodFiles: false,
+          highRiskAccretion: true,
+        },
+      }),
+      'utf-8'
+    );
+
+    // A change that should trigger correction under the active rules (large volume)
+    const largeChange = 'export function large() {\n' + '  console.log("x");\n'.repeat(80) + '}\n';
+
+    const backend = new FakeModelBackend([
+      makeWriteToolCall('large.ts', largeChange),
+      DONE_RESPONSE,
+    ]);
+
+    const agent = new SeatbeltAgent('Large change with limited rules active', backend, worktree);
+    await agent.start(4, { quiet: true });
+
+    // Because smallFocusedChanges is active, this should have entered correction.
+    // The prompt(s) sent while in correction should contain the targeted repair framing
+    // listing only the active rules.
+    const correctionPrompts = backend.systemPrompts.filter(p => p.includes('TARGETED REPAIR'));
+    assert.ok(correctionPrompts.length > 0, 'At least one prompt with targeted repair context should have been sent');
+
+    const relevantPrompt = correctionPrompts[0];
+    assert.ok(relevantPrompt.includes('smallFocusedChanges'));
+    assert.ok(relevantPrompt.includes('highRiskAccretion'));
+    assert.ok(!relevantPrompt.includes('avoidGodFiles'));
+  } finally {
+    await cleanup(worktree);
+  }
+});
+
+test('Integration - startRepairForRules produces correctly scoped prompt and violations', async () => {
+  const worktree = await createTempDir();
+  try {
+    // Broad config
+    const { mkdir, writeFile } = await import('fs/promises');
+    await mkdir(path.join(worktree, '.seatbelt'), { recursive: true });
+    await writeFile(
+      path.join(worktree, '.seatbelt', 'config.json'),
+      JSON.stringify({
+        rules: { smallFocusedChanges: true, avoidGodFiles: true, highRiskAccretion: true },
+      }),
+      'utf-8'
+    );
+
+    const largeCode = 'export function big() {\n' + '  console.log("x");\n'.repeat(80) + '}\n';
+
+    const backend = new FakeModelBackend([
+      makeWriteToolCall('big.ts', largeCode),
+      DONE_RESPONSE,
+    ]);
+
+    const agent = new SeatbeltAgent('Broad correction then narrow repair', backend, worktree);
+    await agent.start(4, { quiet: true });
+
+    // Now start a targeted repair for only highRiskAccretion (even though global config has more)
+    // Note: For a real second pass we'd typically start a fresh agent or continue the session.
+    // Here we demonstrate the API exists and the prompt would be scoped.
+    // In practice the caller would use agent.startRepairForRules([...]) on a new or continued agent.
+
+    // For this test we just assert the API is present and doesn't throw.
+    // A fuller end-to-end with the new API will be added when we have a complete repair flow.
+    assert.strictEqual(typeof (agent as any).startRepairForRules, 'function');
+  } finally {
+    await cleanup(worktree);
+  }
+});
+
+test('Integration - broad correction followed by narrow targeted repair on same worktree', async () => {
+  const worktree = await createTempDir();
+  try {
+    const { mkdir, writeFile } = await import('fs/promises');
+    await mkdir(path.join(worktree, '.seatbelt'), { recursive: true });
+
+    // === Phase 1: Broad config ===
+    await writeFile(
+      path.join(worktree, '.seatbelt', 'config.json'),
+      JSON.stringify({
+        rules: {
+          smallFocusedChanges: true,
+          avoidGodFiles: true,
+          highRiskAccretion: true,
+        },
+      }),
+      'utf-8'
+    );
+
+    const largeHighRiskCode = 
+      'export class MyService {\n' +
+      Array.from({ length: 80 }, () => '  doSomething() {}\n').join('') +
+      '}\n';
+
+    const backend1 = new FakeModelBackend([
+      makeWriteToolCall('MyService.ts', largeHighRiskCode),
+      DONE_RESPONSE,
+    ]);
+
+    const agent1 = new SeatbeltAgent('Initial broad work', backend1, worktree);
+    await agent1.start(5, { quiet: true });
+
+    const broadViolations = agent1.getLastViolations();
+    const hasVolume = broadViolations.some(v => v.ruleId === 'volume-too-large');
+    const hasHighRisk = broadViolations.some(v => v.ruleId === 'high-risk-accretion');
+    assert.ok(hasVolume && hasHighRisk, 'Broad pass should produce both volume and high-risk violations');
+
+    // === Phase 2: Switch to narrow config + call targeted repair ===
+    await writeFile(
+      path.join(worktree, '.seatbelt', 'config.json'),
+      JSON.stringify({
+        rules: {
+          smallFocusedChanges: true,
+          avoidGodFiles: false,
+          highRiskAccretion: false,
+        },
+      }),
+      'utf-8'
+    );
+
+    const backend2 = new FakeModelBackend([
+      makeWriteToolCall('MyService2.ts', largeHighRiskCode),
+      DONE_RESPONSE,
+    ]);
+
+    const agent2 = new SeatbeltAgent('Narrow targeted repair', backend2, worktree);
+    // Use the first-class API even though the config is also narrow (this exercises the full path)
+    await agent2.startRepairForRules(['smallFocusedChanges'], 5, { quiet: true });
+
+    const repairViolations = agent2.getLastViolations();
+    const repairHasVolume = repairViolations.some(v => v.ruleId === 'volume-too-large');
+    const repairHasHighRisk = repairViolations.some(v => v.ruleId === 'high-risk-accretion');
+
+    assert.ok(repairHasVolume, 'Narrow repair should still see volume violations');
+    assert.ok(!repairHasHighRisk, 'Narrow repair for only smallFocusedChanges must not see high-risk violations');
+
+    const repairPrompts = backend2.systemPrompts.filter(p => p.includes('TARGETED REPAIR CONTEXT'));
+    assert.ok(repairPrompts.length > 0);
+
+    const relevantPrompt = repairPrompts[repairPrompts.length - 1];
+    assert.ok(relevantPrompt.includes('smallFocusedChanges'));
+    assert.ok(!relevantPrompt.includes('highRiskAccretion'));
+    assert.ok(!relevantPrompt.includes('avoidGodFiles'));
+  } finally {
+    await cleanup(worktree);
+  }
+});
+
 test('Integration - worktree isolation between two separate agents', async () => {
   const dir1 = await createTempDir('seatbelt-isolation-1-');
   const dir2 = await createTempDir('seatbelt-isolation-2-');

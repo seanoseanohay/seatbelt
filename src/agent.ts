@@ -89,4 +89,35 @@ export class SeatbeltAgent {
   getLastCorrectionState() {
     return this.runner.getLastCorrectionState();
   }
+
+  /**
+   * Starts a targeted repair pass for only the specified rule groups.
+   * This is the first-class API for scoped repair.
+   */
+  async startRepairForRules(
+    ruleGroups: string[], 
+    maxTurns = 30, 
+    options: { quiet?: boolean } = {}
+  ): Promise<void> {
+    if (this.sessionStarted) {
+      console.log('[Seatbelt] Session already active.');
+      return;
+    }
+
+    if (!options.quiet) {
+      console.log('=== Seatbelt Targeted Repair Session ===');
+      console.log(`Repair scope: ${ruleGroups.join(', ')}`);
+    }
+
+    this.sessionStarted = true;
+
+    // Set the scope before running
+    this.runner.setRepairScope?.(ruleGroups);  // will add this to runner
+
+    await this.runner.runWithBackend(maxTurns);
+
+    if (!options.quiet) {
+      console.log('\n[Seatbelt] Targeted repair session ended.');
+    }
+  }
 }

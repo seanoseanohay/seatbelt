@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { buildSystemPrompt, buildTools } from '../../src/harness/prompt-and-tools.js';
 import { DEFAULT_CONFIG } from '../../src/config.js';
+import { CombinedRuleScope } from '../../src/harness/rule-scope.js';
 
 test('buildTools returns only edit tool in correction mode', () => {
   const tools = buildTools(true, ['foo.ts']);
@@ -106,4 +107,68 @@ test('buildSystemPrompt omits language for disabled rule groups', () => {
   assert.ok(prompt.includes('smallest possible focused change'));
   assert.ok(!prompt.includes('god functions or god files'));
   assert.ok(!prompt.includes('high-risk files'));
+});
+
+test('buildSystemPrompt in correction includes specific violation details when provided', () => {
+  const violations = [
+    { ruleId: 'god-file', message: 'This file has too many exports', severity: 'high' as const },
+    { ruleId: 'volume-too-large', message: 'Change is 120 lines', severity: 'medium' as const },
+  ];
+
+  const prompt = buildSystemPrompt(true, ['bad.ts'], DEFAULT_CONFIG, violations);
+
+  assert.ok(prompt.includes('SPECIFIC VIOLATIONS TO FIX'));
+  assert.ok(prompt.includes('[god-file] This file has too many exports'));
+  assert.ok(prompt.includes('[volume-too-large] Change is 120 lines'));
+});
+
+test('buildSystemPrompt in targeted repair includes active rule groups', () => {
+  const configWithSubset = {
+    ...DEFAULT_CONFIG,
+    rules: {
+      smallFocusedChanges: true,
+      avoidGodFiles: false,
+      highRiskAccretion: true,
+    },
+  };
+
+  const prompt = buildSystemPrompt(true, ['foo.ts'], configWithSubset, []);
+
+  assert.ok(prompt.includes('TARGETED REPAIR CONTEXT'));
+  assert.ok(prompt.includes('smallFocusedChanges'));
+  assert.ok(prompt.includes('highRiskAccretion'));
+  assert.ok(!prompt.includes('avoidGodFiles'));
+});
+
+test('buildSystemPrompt prefers explicit repairScope over global config rules', () => {
+  const config = {
+    ...DEFAULT_CONFIG,
+    rules: {
+      smallFocusedChanges: true,
+      avoidGodFiles: true,
+      highRiskAccretion: true,
+    },
+  };
+
+  // Explicit scope is narrower
+  const prompt = buildSystemPrompt(true, ['foo.ts'], config, [], ['smallFocusedChanges']);
+
+  assert.ok(prompt.includes('TARGETED REPAIR CONTEXT'));
+  assert.ok(prompt.includes('smallFocusedChanges'));
+  assert.ok(!prompt.includes('avoidGodFiles'));
+  assert.ok(!prompt.includes('highRiskAccretion'));
+});
+
+test('buildSystemPrompt uses injected RuleScope for targeted repair framing', () => {
+  const narrowScope = new CombinedRuleScope(
+    { smallFocusedChanges: true, avoidGodFiles: true, highRiskAccretion: true },
+    ['highRiskAccretion']
+  );
+
+  const prompt = buildSystemPrompt(true, ['service.ts'], DEFAULT_CONFIG, [], undefined, narrowScope);
+
+  assert.ok(prompt.includes('TARGETED REPAIR CONTEXT'));
+  assert.ok(prompt.includes('highRiskAccretion'));
+  assert.ok(!prompt.includes('smallFocusedChanges'));
+  assert.ok(!prompt.includes('avoidGodFiles'));
 });

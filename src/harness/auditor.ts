@@ -1,4 +1,5 @@
-import { ReviewContext, Violation, ReviewResult } from '../types/index.js';
+import { ReviewContext, Violation, ReviewResult, type RuleScope } from '../types/index.js';
+import { CombinedRuleScope } from './rule-scope.js';
 
 /**
  * Structural Auditor — core of constitutional enforcement.
@@ -10,25 +11,43 @@ export class Auditor {
   private readonly HEURISTIC_MAX_LINES: number;
   private readonly HEURISTIC_MAX_FILES: number;
   private readonly HIGH_RISK_PATTERNS: string[];
-  private readonly config?: Required<SeatbeltConfig>;
+  private ruleScope: RuleScope;
 
-  constructor(config?: Required<SeatbeltConfig>) {
-    this.config = config;
+  constructor(
+    config?: Required<SeatbeltConfig>,
+    ruleScope?: RuleScope
+  ) {
     const auditorConfig = config?.auditor;
     this.HEURISTIC_MAX_LINES = auditorConfig?.maxLinesPerChange ?? 60;
     this.HEURISTIC_MAX_FILES = auditorConfig?.maxFilesPerChange ?? 2;
     this.HIGH_RISK_PATTERNS = auditorConfig?.highRiskPatterns ?? ['service', 'index', 'main', 'app', 'core', 'manager', 'util'];
+
+    // Use provided RuleScope, or create a temporary one from config during migration
+    if (ruleScope) {
+      this.ruleScope = ruleScope;
+    } else {
+      this.ruleScope = new CombinedRuleScope(
+        config?.rules ?? { smallFocusedChanges: true, avoidGodFiles: true, highRiskAccretion: true }
+      );
+    }
+  }
+
+  /**
+   * Updates the RuleScope used by this Auditor (used when entering a targeted repair pass).
+   * This is the main hook for dynamic scope changes during a session.
+   */
+  setRuleScope(scope: RuleScope) {
+    this.ruleScope = scope;
   }
 
   async review(context: ReviewContext): Promise<ReviewResult> {
     const violations: Violation[] = [];
-    const rules = this.config?.rules ?? { smallFocusedChanges: true, avoidGodFiles: true, highRiskAccretion: true };
 
-    const shouldEnforce = (group: keyof NonNullable<Required<SeatbeltConfig>['rules']>) =>
-      rules[group] !== false;
+    const shouldEnforce = (group: 'smallFocusedChanges' | 'avoidGodFiles' | 'highRiskAccretion') =>
+      this.ruleScope.isActive(group);
 
     // Volume checks - gated by smallFocusedChanges
-    if (rules.smallFocusedChanges !== false) {
+    if (shouldEnforce('smallFocusedChanges')) {
       if (context.linesChanged > this.HEURISTIC_MAX_LINES) {
         violations.push({
           ruleId: 'volume-too-large',
@@ -47,7 +66,7 @@ export class Auditor {
     }
 
     // High-risk accretion - gated by highRiskAccretion
-    if (rules.highRiskAccretion !== false && context.touchedHighRiskFiles.length > 0) {
+    if (shouldEnforce('highRiskAccretion') && context.touchedHighRiskFiles.length > 0) {
       violations.push({
         ruleId: 'high-risk-accretion',
         message: `Accretion risk: touched high-risk file(s) ${context.touchedHighRiskFiles.join(', ')} without extracting focused modules.`,

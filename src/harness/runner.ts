@@ -2,6 +2,7 @@ import { HarnessController } from './controller.js';
 import { Worktree } from './worktree.js';
 import { Auditor } from './auditor.js';
 import { loadConfig, DEFAULT_CONFIG, type SeatbeltConfig } from '../config.js';
+import { CombinedRuleScope } from './rule-scope.js';
 import { buildSystemPrompt, buildTools } from './prompt-and-tools.js';
 import { ProgressTracker } from './progress-tracker.js';
 import type { ModelBackend } from '../backends/types.js';
@@ -22,6 +23,7 @@ export class SeatbeltRunner {
     this.task = task;
     this.worktree = new Worktree(worktreePath);
     this.controller = new HarnessController({ worktree: worktreePath });
+    // Note: ruleScope will be properly set once config is loaded in initialize()
     this.backend = backend;
   }
 
@@ -31,10 +33,16 @@ export class SeatbeltRunner {
     // Load basic constitution config if present (.seatbelt/config.json in the worktree)
     try {
       this.config = await loadConfig(this.worktree.path);
-      // Recreate controller with configured auditor (simple first version)
+
+      const ruleScope = new CombinedRuleScope(
+        this.config.rules,
+        // repairScope will be set later via controller when doing targeted repair
+      );
+
+      // Recreate controller with configured auditor
       this.controller = new HarnessController(
         { worktree: this.worktree.path },
-        new Auditor(this.config)
+        new Auditor(this.config, ruleScope)
       );
     } catch {
       // fall back to defaults (already set in constructor)
@@ -107,6 +115,14 @@ export class SeatbeltRunner {
   }
 
   /**
+   * Sets an explicit repair scope for the current session.
+   * Used by higher-level APIs (e.g. SeatbeltAgent.startRepairForRules).
+   */
+  setRepairScope(groups: string[]) {
+    this.controller.setRepairScope(groups);
+  }
+
+  /**
    * High-level entry point using a real backend (Codex or OpenAI).
    * This is the actual model driving loop for the thin vertical slice.
    */
@@ -132,7 +148,24 @@ export class SeatbeltRunner {
       const tools = buildTools(inCorrection, allowedFiles);
 
       // Build the system prompt (harness-owned rules + correction instructions if needed)
-      const systemPrompt = buildSystemPrompt(inCorrection, allowedFiles, this.config);
+      const state = inCorrection ? this.controller.getCorrectionState() : null;
+      const currentViolations = state?.violations ?? [];
+      const repairScope = state?.repairScope;
+
+      // Create a RuleScope that prefers explicit repairScope for targeted repair
+      const effectiveRuleScope = new CombinedRuleScope(
+        this.config.rules,
+        repairScope
+      );
+
+      const systemPrompt = buildSystemPrompt(
+        inCorrection, 
+        allowedFiles, 
+        this.config, 
+        currentViolations, 
+        repairScope,
+        effectiveRuleScope
+      );
 
       const response = await this.backend.call({
         systemPrompt,

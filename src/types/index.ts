@@ -28,6 +28,8 @@ export interface CorrectionState {
   maxIterations: number;
   violations: Violation[];
   allowedFiles: Set<string>;
+  /** Optional explicit scope for a targeted repair pass (subset of rule group names). */
+  repairScope?: string[];
 }
 
 export interface HarnessOptions {
@@ -35,4 +37,11 @@ export interface HarnessOptions {
   constitution?: ConstitutionRule[];
   maxCorrectionIterations?: number;
   forcedReviewAfterMutations?: number;
+}
+
+export type RuleGroup = 'smallFocusedChanges' | 'avoidGodFiles' | 'highRiskAccretion';
+
+export interface RuleScope {
+  /** Returns whether the given rule group is currently active / should be enforced. */
+  isActive(group: RuleGroup): boolean;
 }

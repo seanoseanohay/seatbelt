@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { Auditor } from '../../src/harness/auditor.js';
+import { CombinedRuleScope } from '../../src/harness/rule-scope.js';
 
 test('Auditor - volume violation', async () => {
   const auditor = new Auditor();
@@ -103,4 +104,27 @@ test('Auditor respects highRiskAccretion rule group', async () => {
   });
   const lenientResult = await lenient.review(context);
   assert.ok(!lenientResult.violations.some(v => v.ruleId === 'high-risk-accretion'));
+});
+
+test('Auditor respects explicit RuleScope (repairScope takes precedence)', async () => {
+  const godFileCode = Array.from({ length: 6 }, (_, i) => `export const x${i} = ${i};`).join('\n');
+
+  const context = {
+    filesChanged: ['god.ts'],
+    linesChanged: 10,
+    touchedHighRiskFiles: [],
+    fileContents: new Map([['god.ts', godFileCode]]),
+  };
+
+  // Global config would enable avoidGodFiles, but we pass a narrow RuleScope
+  const narrowScope = new CombinedRuleScope(
+    { smallFocusedChanges: true, avoidGodFiles: true, highRiskAccretion: true },
+    ['smallFocusedChanges']   // explicit narrow scope
+  );
+
+  const auditor = new Auditor(undefined, narrowScope);
+  const result = await auditor.review(context);
+
+  // Should NOT see god-file violation because avoidGodFiles is not in the explicit scope
+  assert.ok(!result.violations.some(v => v.ruleId === 'god-file'));
 });

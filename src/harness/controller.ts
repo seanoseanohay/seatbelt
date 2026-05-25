@@ -1,5 +1,6 @@
 import { Auditor } from './auditor.js';
 import { loadConfig } from '../config.js';
+import { CombinedRuleScope } from './rule-scope.js';
 import {
   ReviewContext,
   Violation,
@@ -135,6 +136,26 @@ export class HarnessController {
       filesInUnit: Array.from(this.filesInUnit),
       correction: { ...this.correction, allowedFiles: Array.from(this.correction.allowedFiles) },
     };
+  }
+
+  /**
+   * Sets an explicit repair scope for the current (or next) correction pass.
+   * When set, targeted repair prompts will be framed only around these rule groups.
+   * This is the key hook for "second agent gets only these specific violations".
+   */
+  setRepairScope(groups: string[]) {
+    this.correction.repairScope = groups;
+
+    // Update the Auditor to use a scope that reflects this repair pass
+    if (this.auditor && typeof (this.auditor as any).setRuleScope === 'function') {
+      // For now we create a narrow scope containing only the requested groups.
+      // A more sophisticated version would combine global + repair scope.
+      const newScope = new CombinedRuleScope(
+        { smallFocusedChanges: false, avoidGodFiles: false, highRiskAccretion: false },
+        groups
+      );
+      (this.auditor as any).setRuleScope(newScope);
+    }
   }
 
   private resetUnit() {
