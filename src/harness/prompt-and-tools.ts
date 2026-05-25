@@ -9,16 +9,46 @@ export function buildSystemPrompt(
   allowedFiles: string[], 
   config?: Required<SeatbeltConfig>
 ): string {
+  const strictness = config?.prompt?.strictness ?? 'default';
+  const rules = config?.rules ?? { smallFocusedChanges: true, avoidGodFiles: true, highRiskAccretion: true };
+
+  // These two principles are universal and always present
+  const universalPrinciples = [
+    'The harness (not you) owns all review and promotion decisions.',
+    'The harness (not you) decides when work is clean. You do NOT get to decide when a unit of work is complete.',
+  ];
+
+  const additionalPrinciples: string[] = [];
+
+  if (rules.smallFocusedChanges !== false) {
+    additionalPrinciples.push(
+      strictness === 'strict'
+        ? 'Make the SMALLEST possible focused change. Err on the side of doing less.'
+        : 'Make the smallest possible focused change.'
+    );
+  }
+
+  if (rules.avoidGodFiles !== false) {
+    additionalPrinciples.push(
+      'Never create god functions or god files. If a file or function is already doing too much, do not add to it.'
+    );
+  }
+
+  if (rules.highRiskAccretion !== false) {
+    additionalPrinciples.push(
+      'Do not accrete unrelated behavior into high-risk files or existing modules.'
+    );
+  }
+
+  const allPrinciples = [...universalPrinciples, ...additionalPrinciples];
+
   const baseRules = `You are operating under strict constitutional governance (Seatbelt harness).
-The harness (not you) owns all review and promotion decisions.
+${allPrinciples.join('\n')}
 
 Core rules (non-negotiable):
-- Make the smallest possible focused change.
-- Never create god functions or god files.
-- Do not accrete unrelated behavior into existing files.
-- The harness (not you) decides when work is clean.
+${allPrinciples.map(p => `- ${p}`).join('\n')}
 
-You do NOT get to decide when a unit of work is complete. The harness will evaluate your changes after every mutation.`;
+When in doubt, make a smaller change than you think is necessary.`;
 
   if (inCorrection) {
     return `${baseRules}

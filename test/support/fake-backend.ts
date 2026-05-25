@@ -23,9 +23,18 @@ import type { ModelBackend, ModelResponse, ToolCall } from '../../src/backends/t
 export class FakeModelBackend implements ModelBackend {
   private responses: Array<ModelResponse | ((turn: number, lastPrompt: string) => ModelResponse)>;
   private callCount = 0;
-  /** Captured tools offered by the harness on each call (for asserting real tool restrictions in correction mode). */
+  /**
+   * Tools offered by the harness on each call.
+   * Useful for asserting that correction mode restricts the tool set to only 'edit'
+   * on the allowed files.
+   */
   public toolsOffered: any[][] = [];
-  /** Captured full system prompts sent by the harness (strong proof of correction instructions + allowed files). */
+
+  /**
+   * Full system prompts sent by the harness on each call.
+   * This is the primary signal the model receives about being in correction mode
+   * (contains "STRICT CORRECTION MODE", allowed files list, and restriction instructions).
+   */
   public systemPrompts: string[] = [];
 
   constructor(

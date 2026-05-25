@@ -10,8 +10,10 @@ export class Auditor {
   private readonly HEURISTIC_MAX_LINES: number;
   private readonly HEURISTIC_MAX_FILES: number;
   private readonly HIGH_RISK_PATTERNS: string[];
+  private readonly config?: Required<SeatbeltConfig>;
 
   constructor(config?: Required<SeatbeltConfig>) {
+    this.config = config;
     const auditorConfig = config?.auditor;
     this.HEURISTIC_MAX_LINES = auditorConfig?.maxLinesPerChange ?? 60;
     this.HEURISTIC_MAX_FILES = auditorConfig?.maxFilesPerChange ?? 2;
@@ -20,25 +22,32 @@ export class Auditor {
 
   async review(context: ReviewContext): Promise<ReviewResult> {
     const violations: Violation[] = [];
+    const rules = this.config?.rules ?? { smallFocusedChanges: true, avoidGodFiles: true, highRiskAccretion: true };
 
-    // Volume checks
-    if (context.linesChanged > this.HEURISTIC_MAX_LINES) {
-      violations.push({
-        ruleId: 'volume-too-large',
-        message: `Change is too large for one unit (${context.linesChanged} lines). Prefer small focused changes.`,
-        severity: 'medium',
-      });
+    const shouldEnforce = (group: keyof NonNullable<Required<SeatbeltConfig>['rules']>) =>
+      rules[group] !== false;
+
+    // Volume checks - gated by smallFocusedChanges
+    if (rules.smallFocusedChanges !== false) {
+      if (context.linesChanged > this.HEURISTIC_MAX_LINES) {
+        violations.push({
+          ruleId: 'volume-too-large',
+          message: `Change is too large for one unit (${context.linesChanged} lines). Prefer small focused changes.`,
+          severity: 'medium',
+        });
+      }
+
+      if (context.filesChanged.length > this.HEURISTIC_MAX_FILES) {
+        violations.push({
+          ruleId: 'too-many-files',
+          message: `Too many files changed (${context.filesChanged.length}) for a single logical unit.`,
+          severity: 'medium',
+        });
+      }
     }
 
-    if (context.filesChanged.length > this.HEURISTIC_MAX_FILES) {
-      violations.push({
-        ruleId: 'too-many-files',
-        message: `Too many files changed (${context.filesChanged.length}) for a single logical unit.`,
-        severity: 'medium',
-      });
-    }
-
-    if (context.touchedHighRiskFiles.length > 0) {
+    // High-risk accretion - gated by highRiskAccretion
+    if (rules.highRiskAccretion !== false && context.touchedHighRiskFiles.length > 0) {
       violations.push({
         ruleId: 'high-risk-accretion',
         message: `Accretion risk: touched high-risk file(s) ${context.touchedHighRiskFiles.join(', ')} without extracting focused modules.`,
@@ -62,7 +71,8 @@ export class Auditor {
       const hasTypes = typeOnlyExports.length > 0;
       const hasBehavior = behavioral >= 2;
 
-      if (hasTypes && hasBehavior && context.filesChanged.length === 1) {
+      // Mixed concerns is also an SRP/god-file smell → gated with avoidGodFiles
+      if (shouldEnforce('avoidGodFiles') && hasTypes && hasBehavior && context.filesChanged.length === 1) {
         violations.push({
           ruleId: 'mixed-concerns-single-file',
           message: `Structural SRP violation: mixing types and behavior in a single file (${file}).`,
@@ -70,27 +80,30 @@ export class Auditor {
         });
       }
 
-      if (behavioral >= 5) {
-        violations.push({
-          ruleId: 'god-file',
-          message: `File ${file} exports ~${behavioral} behavioral items — high risk of mixing responsibilities (god file).`,
-          severity: 'high',
-        });
-      }
+      // God file / SRP checks - gated by avoidGodFiles
+      if (shouldEnforce('avoidGodFiles')) {
+        if (behavioral >= 5) {
+          violations.push({
+            ruleId: 'god-file',
+            message: `File ${file} exports ~${behavioral} behavioral items — high risk of mixing responsibilities (god file).`,
+            severity: 'high',
+          });
+        }
 
-      // God-function heuristic (rough)
-      const longFuncMatches = content.match(/function\s+\w+\s*\([^)]*\)\s*\{[\s\S]{300,}?^\s*\}/gm) || [];
-      if (longFuncMatches.length > 0) {
-        violations.push({
-          ruleId: 'god-function',
-          message: `File ${file} contains one or more very large function bodies — likely doing too many things.`,
-          severity: 'high',
-        });
+        // God-function heuristic (rough)
+        const longFuncMatches = content.match(/function\s+\w+\s*\([^)]*\)\s*\{[\s\S]{300,}?^\s*\}/gm) || [];
+        if (longFuncMatches.length > 0) {
+          violations.push({
+            ruleId: 'god-function',
+            message: `File ${file} contains one or more very large function bodies — likely doing too many things.`,
+            severity: 'high',
+          });
+        }
       }
     }
 
-    // Single-file behavioral concentration
-    if (context.filesChanged.length === 1 && totalBehavioralExports >= 3) {
+    // Single-file behavioral concentration - also under avoidGodFiles
+    if (shouldEnforce('avoidGodFiles') && context.filesChanged.length === 1 && totalBehavioralExports >= 3) {
       const onlyFile = context.filesChanged[0];
       violations.push({
         ruleId: 'single-file-behavioral-bloat',
@@ -99,8 +112,8 @@ export class Auditor {
       });
     }
 
-    // Cross-file concentration
-    if (totalBehavioralExports > 6 && context.filesChanged.length <= 2) {
+    // Cross-file concentration - also under avoidGodFiles
+    if (shouldEnforce('avoidGodFiles') && totalBehavioralExports > 6 && context.filesChanged.length <= 2) {
       violations.push({
         ruleId: 'srp-concentration',
         message: `High SRP risk: ~${totalBehavioralExports} behavioral exports concentrated in only ${context.filesChanged.length} file(s).`,

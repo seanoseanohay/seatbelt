@@ -74,3 +74,36 @@ test('buildSystemPrompt correction with empty allowedFiles still emits restricti
   assert.ok(prompt.includes('You may ONLY edit these files: '));
   assert.ok(prompt.includes('No new files allowed'));
 });
+
+test('buildSystemPrompt uses stricter language when prompt.strictness is "strict"', () => {
+  const strictConfig = {
+    ...DEFAULT_CONFIG,
+    prompt: { strictness: 'strict' as const },
+  };
+
+  const prompt = buildSystemPrompt(false, [], strictConfig);
+  assert.ok(prompt.includes('Err on the side of doing less'));
+  assert.ok(prompt.includes('If a file or function is already doing too much'));
+});
+
+test('buildSystemPrompt uses default language when strictness is not set or "default"', () => {
+  const defaultPrompt = buildSystemPrompt(false, [], DEFAULT_CONFIG);
+  assert.ok(!defaultPrompt.includes('Err on the side of doing less'));
+});
+
+test('buildSystemPrompt omits language for disabled rule groups', () => {
+  const configWithSomeRulesDisabled = {
+    ...DEFAULT_CONFIG,
+    rules: {
+      smallFocusedChanges: true,
+      avoidGodFiles: false,
+      highRiskAccretion: false,
+    },
+  };
+
+  const prompt = buildSystemPrompt(false, [], configWithSomeRulesDisabled);
+
+  assert.ok(prompt.includes('smallest possible focused change'));
+  assert.ok(!prompt.includes('god functions or god files'));
+  assert.ok(!prompt.includes('high-risk files'));
+});

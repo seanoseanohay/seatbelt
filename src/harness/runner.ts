@@ -1,7 +1,7 @@
 import { HarnessController } from './controller.js';
 import { Worktree } from './worktree.js';
 import { Auditor } from './auditor.js';
-import { loadConfig } from '../config.js';
+import { loadConfig, DEFAULT_CONFIG, type SeatbeltConfig } from '../config.js';
 import { buildSystemPrompt, buildTools } from './prompt-and-tools.js';
 import { ProgressTracker } from './progress-tracker.js';
 import type { ModelBackend } from '../backends/types.js';
@@ -16,6 +16,7 @@ export class SeatbeltRunner {
   private backend?: ModelBackend;
   private task: string;
   private progress = new ProgressTracker();
+  private config: Required<SeatbeltConfig> = DEFAULT_CONFIG; // will be overwritten in initialize()
 
   constructor(task: string, worktreePath: string, backend?: ModelBackend) {
     this.task = task;
@@ -29,14 +30,15 @@ export class SeatbeltRunner {
 
     // Load basic constitution config if present (.seatbelt/config.json in the worktree)
     try {
-      const config = await loadConfig(this.worktree.path);
+      this.config = await loadConfig(this.worktree.path);
       // Recreate controller with configured auditor (simple first version)
       this.controller = new HarnessController(
         { worktree: this.worktree.path },
-        new Auditor(config)
+        new Auditor(this.config)
       );
     } catch {
       // fall back to defaults (already set in constructor)
+      this.config = DEFAULT_CONFIG;
     }
 
     console.log(`[Seatbelt] Worktree ready at ${this.worktree.path}`);
@@ -96,6 +98,15 @@ export class SeatbeltRunner {
   }
 
   /**
+   * Test / observability hook.
+   * Returns the most recent correction state (including the list of violations)
+   * from the last time the Auditor ran.
+   */
+  getLastCorrectionState() {
+    return this.controller.getCorrectionState();
+  }
+
+  /**
    * High-level entry point using a real backend (Codex or OpenAI).
    * This is the actual model driving loop for the thin vertical slice.
    */
@@ -121,7 +132,7 @@ export class SeatbeltRunner {
       const tools = buildTools(inCorrection, allowedFiles);
 
       // Build the system prompt (harness-owned rules + correction instructions if needed)
-      const systemPrompt = buildSystemPrompt(inCorrection, allowedFiles);
+      const systemPrompt = buildSystemPrompt(inCorrection, allowedFiles, this.config);
 
       const response = await this.backend.call({
         systemPrompt,

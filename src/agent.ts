@@ -71,4 +71,22 @@ export class SeatbeltAgent {
   isInCorrection(): boolean {
     return this.runner.isInCorrection;
   }
+
+  /**
+   * Test / observability hook.
+   * Returns the violations from the last Auditor review (if any).
+   * Useful for integration tests that need to assert on *which* specific
+   * constitutional rules were triggered.
+   */
+  getLastViolations() {
+    return this.runner.getLastCorrectionState()?.violations ?? [];
+  }
+
+  /**
+   * Test / observability hook.
+   * Returns the full last correction state (including active rules/violations).
+   */
+  getLastCorrectionState() {
+    return this.runner.getLastCorrectionState();
+  }
 }
