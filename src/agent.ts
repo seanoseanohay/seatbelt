@@ -111,8 +111,9 @@ export class SeatbeltAgent {
 
     this.sessionStarted = true;
 
-    // Set the scope before running
-    this.runner.setRepairScope?.(ruleGroups);  // will add this to runner
+    // Set the scope before running. Runner owns the repairScope so initialize() can wire it
+    // into the fresh Auditor/CombinedRuleScope (and Controller correction state).
+    this.runner.setRepairScope(ruleGroups);
 
     await this.runner.runWithBackend(maxTurns);
 

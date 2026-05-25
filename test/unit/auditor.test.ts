@@ -2,6 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { Auditor } from '../../src/harness/auditor.js';
 import { CombinedRuleScope } from '../../src/harness/rule-scope.js';
+import { checkAvoidGodFiles } from '../../src/harness/rules/avoid-god-files.js';
+import { checkSmallFocusedChanges } from '../../src/harness/rules/small-focused-changes.js';
+import { checkHighRiskAccretion } from '../../src/harness/rules/high-risk-accretion.js';
 
 test('Auditor - volume violation', async () => {
   const auditor = new Auditor();
@@ -104,6 +107,38 @@ test('Auditor respects highRiskAccretion rule group', async () => {
   });
   const lenientResult = await lenient.review(context);
   assert.ok(!lenientResult.violations.some(v => v.ruleId === 'high-risk-accretion'));
+});
+
+test('checkAvoidGodFiles module produces expected violations', () => {
+  const godFileCode = Array.from({ length: 6 }, (_, i) => `export const x${i} = ${i};`).join('\n');
+  const context = {
+    filesChanged: ['god.ts'],
+    linesChanged: 10,
+    touchedHighRiskFiles: [],
+    fileContents: new Map([['god.ts', godFileCode]]),
+  };
+
+  const violations = checkAvoidGodFiles(context, godFileCode, 'god.ts', 6);
+  assert.ok(violations.some(v => v.ruleId === 'god-file'));
+  assert.ok(violations.some(v => v.ruleId === 'single-file-behavioral-bloat'));
+});
+
+test('checkSmallFocusedChanges module produces expected volume violations', () => {
+  const violations = checkSmallFocusedChanges(100, 3, 60, 2);
+  assert.ok(violations.some(v => v.ruleId === 'volume-too-large'));
+  assert.ok(violations.some(v => v.ruleId === 'too-many-files'));
+});
+
+test('checkHighRiskAccretion module produces expected violation', () => {
+  const context = {
+    filesChanged: ['service.ts'],
+    linesChanged: 10,
+    touchedHighRiskFiles: ['service.ts'],
+    fileContents: new Map(),
+  };
+
+  const violations = checkHighRiskAccretion(context);
+  assert.ok(violations.some(v => v.ruleId === 'high-risk-accretion'));
 });
 
 test('Auditor respects explicit RuleScope (repairScope takes precedence)', async () => {

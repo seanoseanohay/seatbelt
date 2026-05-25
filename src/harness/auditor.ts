@@ -1,5 +1,12 @@
 import { ReviewContext, Violation, ReviewResult, type RuleScope } from '../types/index.js';
 import { CombinedRuleScope } from './rule-scope.js';
+// All rule modules are imported via the barrel for consistency and discoverability.
+import {
+  checkAvoidGodFiles,
+  checkSrpConcentration,
+  checkSmallFocusedChanges,
+  checkHighRiskAccretion,
+} from './rules/index.js';
 
 /**
  * Structural Auditor — core of constitutional enforcement.
@@ -46,34 +53,6 @@ export class Auditor {
     const shouldEnforce = (group: 'smallFocusedChanges' | 'avoidGodFiles' | 'highRiskAccretion') =>
       this.ruleScope.isActive(group);
 
-    // Volume checks - gated by smallFocusedChanges
-    if (shouldEnforce('smallFocusedChanges')) {
-      if (context.linesChanged > this.HEURISTIC_MAX_LINES) {
-        violations.push({
-          ruleId: 'volume-too-large',
-          message: `Change is too large for one unit (${context.linesChanged} lines). Prefer small focused changes.`,
-          severity: 'medium',
-        });
-      }
-
-      if (context.filesChanged.length > this.HEURISTIC_MAX_FILES) {
-        violations.push({
-          ruleId: 'too-many-files',
-          message: `Too many files changed (${context.filesChanged.length}) for a single logical unit.`,
-          severity: 'medium',
-        });
-      }
-    }
-
-    // High-risk accretion - gated by highRiskAccretion
-    if (shouldEnforce('highRiskAccretion') && context.touchedHighRiskFiles.length > 0) {
-      violations.push({
-        ruleId: 'high-risk-accretion',
-        message: `Accretion risk: touched high-risk file(s) ${context.touchedHighRiskFiles.join(', ')} without extracting focused modules.`,
-        severity: 'high',
-      });
-    }
-
     // Structural analysis on actual file content
     let totalBehavioralExports = 0;
 
@@ -90,54 +69,31 @@ export class Auditor {
       const hasTypes = typeOnlyExports.length > 0;
       const hasBehavior = behavioral >= 2;
 
-      // Mixed concerns is also an SRP/god-file smell → gated with avoidGodFiles
-      if (shouldEnforce('avoidGodFiles') && hasTypes && hasBehavior && context.filesChanged.length === 1) {
-        violations.push({
-          ruleId: 'mixed-concerns-single-file',
-          message: `Structural SRP violation: mixing types and behavior in a single file (${file}).`,
-          severity: 'high',
-        });
-      }
-
-      // God file / SRP checks - gated by avoidGodFiles
+      // Avoid god files / SRP checks - delegated to module
       if (shouldEnforce('avoidGodFiles')) {
-        if (behavioral >= 5) {
-          violations.push({
-            ruleId: 'god-file',
-            message: `File ${file} exports ~${behavioral} behavioral items — high risk of mixing responsibilities (god file).`,
-            severity: 'high',
-          });
-        }
-
-        // God-function heuristic (rough)
-        const longFuncMatches = content.match(/function\s+\w+\s*\([^)]*\)\s*\{[\s\S]{300,}?^\s*\}/gm) || [];
-        if (longFuncMatches.length > 0) {
-          violations.push({
-            ruleId: 'god-function',
-            message: `File ${file} contains one or more very large function bodies — likely doing too many things.`,
-            severity: 'high',
-          });
-        }
+        violations.push(...checkAvoidGodFiles(context, content, file, totalBehavioralExports));
       }
     }
 
-    // Single-file behavioral concentration - also under avoidGodFiles
-    if (shouldEnforce('avoidGodFiles') && context.filesChanged.length === 1 && totalBehavioralExports >= 3) {
-      const onlyFile = context.filesChanged[0];
-      violations.push({
-        ruleId: 'single-file-behavioral-bloat',
-        message: `Structural SRP violation: ${totalBehavioralExports}+ exported behavioral items in a single file (${onlyFile}). Strongly prefer separating concerns.`,
-        severity: 'high',
-      });
+    // === Rule module delegations (this is the extension point for new rule groups) ===
+    // High-risk accretion
+    if (shouldEnforce('highRiskAccretion')) {
+      violations.push(...checkHighRiskAccretion(context));
     }
 
-    // Cross-file concentration - also under avoidGodFiles
-    if (shouldEnforce('avoidGodFiles') && totalBehavioralExports > 6 && context.filesChanged.length <= 2) {
-      violations.push({
-        ruleId: 'srp-concentration',
-        message: `High SRP risk: ~${totalBehavioralExports} behavioral exports concentrated in only ${context.filesChanged.length} file(s).`,
-        severity: 'medium',
-      });
+    // Cross-file SRP concentration
+    if (shouldEnforce('avoidGodFiles')) {
+      violations.push(...checkSrpConcentration(totalBehavioralExports, context.filesChanged.length));
+    }
+
+    // Volume / small-focused changes
+    if (shouldEnforce('smallFocusedChanges')) {
+      violations.push(...checkSmallFocusedChanges(
+        context.linesChanged,
+        context.filesChanged.length,
+        this.HEURISTIC_MAX_LINES,
+        this.HEURISTIC_MAX_FILES
+      ));
     }
 
     return {

@@ -1,6 +1,7 @@
 import { Auditor } from './auditor.js';
 import { loadConfig } from '../config.js';
 import { CombinedRuleScope } from './rule-scope.js';
+import type { RuleScope } from '../types/index.js';
 import {
   ReviewContext,
   Violation,
@@ -146,15 +147,17 @@ export class HarnessController {
   setRepairScope(groups: string[]) {
     this.correction.repairScope = groups;
 
-    // Update the Auditor to use a scope that reflects this repair pass
-    if (this.auditor && typeof (this.auditor as any).setRuleScope === 'function') {
-      // For now we create a narrow scope containing only the requested groups.
-      // A more sophisticated version would combine global + repair scope.
-      const newScope = new CombinedRuleScope(
+    // Update the Auditor so enforcement stays consistent with the new targeted scope.
+    // The Auditor exposes setRuleScope for exactly this dynamic repair-scope handoff.
+    if (this.auditor) {
+      // Narrow scope for the repair pass (only the groups explicitly requested).
+      // Later, when we have a proper ConstitutionalScope state machine, this will
+      // become: const newScope = this.constitutionalScope.getCurrentScope();
+      const newScope: RuleScope = new CombinedRuleScope(
         { smallFocusedChanges: false, avoidGodFiles: false, highRiskAccretion: false },
         groups
       );
-      (this.auditor as any).setRuleScope(newScope);
+      this.auditor.setRuleScope(newScope);
     }
   }
 

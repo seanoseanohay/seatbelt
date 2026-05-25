@@ -415,6 +415,52 @@ test('Integration - broad correction followed by narrow targeted repair on same 
   }
 });
 
+test('Integration - startRepairForRules + RuleScope produces correctly scoped enforcement and prompt (highRisk only)', async () => {
+  const worktree = await createTempDir();
+  try {
+    const { mkdir, writeFile } = await import('fs/promises');
+    await mkdir(path.join(worktree, '.seatbelt'), { recursive: true });
+
+    // Broad config
+    await writeFile(
+      path.join(worktree, '.seatbelt', 'config.json'),
+      JSON.stringify({
+        rules: { smallFocusedChanges: true, avoidGodFiles: true, highRiskAccretion: true },
+      }),
+      'utf-8'
+    );
+
+    const largeHighRiskCode = 'export class MyService {\n' + Array.from({ length: 82 }, () => '  doSomething() {}\n').join('') + '}\n';
+
+    // First agent does broad work
+    const backend1 = new FakeModelBackend([
+      makeWriteToolCall('MyService.ts', largeHighRiskCode),
+      DONE_RESPONSE,
+    ]);
+    const agent1 = new SeatbeltAgent('Broad work triggering multiple rules', backend1, worktree);
+    await agent1.start(5, { quiet: true });
+
+    // Second agent does explicit narrow repair for only highRiskAccretion
+    const backend2 = new FakeModelBackend([
+      makeWriteToolCall('MyService2.ts', largeHighRiskCode),
+      DONE_RESPONSE,
+    ]);
+    const agent2 = new SeatbeltAgent('Narrow high-risk repair via first-class API', backend2, worktree);
+    await agent2.startRepairForRules(['highRiskAccretion'], 5, { quiet: true });
+
+    const repairViolations = agent2.getLastViolations();
+    assert.ok(repairViolations.some(v => v.ruleId === 'high-risk-accretion'), 'Should see high-risk violation');
+    assert.ok(!repairViolations.some(v => v.ruleId === 'volume-too-large'), 'Should not see volume violation under narrow scope');
+
+    const repairPrompt = backend2.systemPrompts.find(p => p.includes('TARGETED REPAIR CONTEXT'));
+    assert.ok(repairPrompt);
+    assert.ok(repairPrompt.includes('highRiskAccretion'));
+    assert.ok(!repairPrompt.includes('smallFocusedChanges'));
+  } finally {
+    await cleanup(worktree);
+  }
+});
+
 test('Integration - worktree isolation between two separate agents', async () => {
   const dir1 = await createTempDir('seatbelt-isolation-1-');
   const dir2 = await createTempDir('seatbelt-isolation-2-');

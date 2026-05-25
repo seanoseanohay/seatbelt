@@ -45,3 +45,6 @@ seanoseanohay-seatbelt-*.tgz
 # GitHub Pages build (if building locally)
 docs/.jekyll-cache/
 docs/_site/
+
+# Local handoff / session state artifacts (per Claude.md hygiene)
+memory/

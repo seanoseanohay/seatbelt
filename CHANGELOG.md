@@ -25,6 +25,29 @@ This release significantly strengthens verification of the core seatbelt guarant
 
 ---
 
+## [0.3.5] - 2026-05-25
+
+### Added
+- First-class `startRepairForRules(ruleGroups, ...)` API on `SeatbeltAgent` (and supporting `setRepairScope` on Runner/Controller) for targeted repair passes.
+- `RuleScope` + `CombinedRuleScope` abstraction: explicit `repairScope` now correctly narrows both Auditor enforcement and prompt framing. Global config rules are the base; repair scope wins when present.
+- Extracted constitutional rule modules under `src/harness/rules/` (avoid-god-files, small-focused-changes, high-risk-accretion) + barrel (`rules/index.ts`). Auditor now delegates cleanly; this is the documented extension point for new rule groups.
+- 12 integration tests exercising the full real harness (including two end-to-end broad-pass → narrow `startRepairForRules` flows that prove the targeted repair vision with real worktrees, real Auditor, and only the model scripted).
+
+### Changed
+- Removed last `require` + `as any` / cast hack in the dynamic scope update path (`Controller.setRepairScope`). Runner now owns the repair intent and ensures it survives `initialize()` controller recreation.
+- All three rule modules follow identical structure and JSDoc pattern.
+- Minor test robustness fix (line count threshold) so high-risk-only repair scoping test actually triggers review.
+
+### Verified
+- `npm run build` clean.
+- 49/49 unit tests passing (including dedicated `Auditor respects explicit RuleScope (repairScope takes precedence)` and per-module `check*` tests).
+- 12/12 integration tests passing. The critical "highRisk only" narrow repair case now shows exactly the expected single violation type and scoped prompt language.
+
+### Notes
+This slice completes the core "targeted repair" capability: after a broad violating change, a subsequent agent can be handed only a precise subset of rule groups and receives correspondingly narrowed prompts + enforcement. All changes small, fully real-FS+git tested, and prepared for a future ConstitutionalScope state machine.
+
+---
+
 ## [0.0.1] - Initial Exploration Phase
 
 ### Context

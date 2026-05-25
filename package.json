@@ -1,6 +1,6 @@
 {
   "name": "@seanoseanohay/seatbelt",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Seatbelt — constitutional governance harness for agentic coding. The harness owns review timing and correction.",
   "type": "module",
   "main": "dist/index.js",

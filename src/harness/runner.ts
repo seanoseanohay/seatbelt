@@ -18,12 +18,14 @@ export class SeatbeltRunner {
   private task: string;
   private progress = new ProgressTracker();
   private config: Required<SeatbeltConfig> = DEFAULT_CONFIG; // will be overwritten in initialize()
+  /** Current or pending explicit repair scope (for targeted repair passes via startRepairForRules). */
+  private repairScope?: string[];
 
   constructor(task: string, worktreePath: string, backend?: ModelBackend) {
     this.task = task;
     this.worktree = new Worktree(worktreePath);
     this.controller = new HarnessController({ worktree: worktreePath });
-    // Note: ruleScope will be properly set once config is loaded in initialize()
+    // Note: ruleScope (and repairScope if set via startRepairForRules before run) will be applied in initialize()
     this.backend = backend;
   }
 
@@ -34,19 +36,32 @@ export class SeatbeltRunner {
     try {
       this.config = await loadConfig(this.worktree.path);
 
+      // Use runner's repairScope (if a targeted repair was requested before run) so the
+      // initial Auditor and its RuleScope are already narrowed. This is the clean handoff
+      // point that makes startRepairForRules work independently of global config.
+      const effectiveRepair = this.repairScope;
       const ruleScope = new CombinedRuleScope(
         this.config.rules,
-        // repairScope will be set later via controller when doing targeted repair
+        effectiveRepair
       );
 
-      // Recreate controller with configured auditor
+      // Recreate controller with configured auditor (this was the source of the old
+      // "set before init is lost" bug for repair scopes).
       this.controller = new HarnessController(
         { worktree: this.worktree.path },
         new Auditor(this.config, ruleScope)
       );
+
+      // Re-apply so the *new* controller's correction state also carries the repairScope
+      // (used by prompt builder for TARGETED REPAIR CONTEXT and by getLastCorrectionState).
+      if (effectiveRepair && effectiveRepair.length > 0) {
+        this.controller.setRepairScope(effectiveRepair);
+      }
     } catch {
       // fall back to defaults (already set in constructor)
       this.config = DEFAULT_CONFIG;
+      // If a repairScope was set before run, the pre-init setRepairScope already
+      // applied it to the ctor's controller/auditor, so no further action needed here.
     }
 
     console.log(`[Seatbelt] Worktree ready at ${this.worktree.path}`);
@@ -117,9 +132,16 @@ export class SeatbeltRunner {
   /**
    * Sets an explicit repair scope for the current session.
    * Used by higher-level APIs (e.g. SeatbeltAgent.startRepairForRules).
+   *
+   * This is the clean entry point for dynamic scope changes. It stores the intent on the
+   * runner (so initialize can apply it even after controller recreation) and propagates
+   * to the current controller/auditor if one exists.
    */
   setRepairScope(groups: string[]) {
-    this.controller.setRepairScope(groups);
+    this.repairScope = groups && groups.length > 0 ? groups.slice() : undefined;
+    if (this.controller) {
+      this.controller.setRepairScope(groups);
+    }
   }
 
   /**
