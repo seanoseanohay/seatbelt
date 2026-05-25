@@ -1,0 +1,54 @@
+{
+  "name": "@seanoseanohay/seatbelt",
+  "version": "0.2.0",
+  "description": "Seatbelt — constitutional governance harness for agentic coding. The harness owns review timing and correction.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "seatbelt": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE*"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "seatbelt": "tsx src/cli.ts",
+    "test": "echo \"No tests yet\" && exit 0",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build",
+    "reinstall": "npm run build && npm install -g ."
+  },
+  "keywords": [
+    "seatbelt",
+    "governance",
+    "constitutional",
+    "ai",
+    "coding-agent",
+    "codex"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seanoseanohay/seatbelt.git"
+  },
+  "bugs": {
+    "url": "https://github.com/seanoseanohay/seatbelt/issues"
+  },
+  "homepage": "https://seanoseanohay.github.io/seatbelt",
+  "license": "MIT",
+  "dependencies": {
+    "@earendil-works/pi-ai": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

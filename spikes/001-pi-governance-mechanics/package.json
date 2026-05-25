@@ -1,0 +1,14 @@
+{
+  "name": "pi-governance-spike",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "exp1": "tsx src/experiment-1-before-tool-call.ts",
+    "exp2": "tsx src/experiment-2-checkpoints.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
