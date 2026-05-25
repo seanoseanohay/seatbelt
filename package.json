@@ -1,6 +1,6 @@
 {
   "name": "@seanoseanohay/seatbelt",
-  "version": "0.2.0",
+  "version": "0.3.4",
   "description": "Seatbelt — constitutional governance harness for agentic coding. The harness owns review timing and correction.",
   "type": "module",
   "main": "dist/index.js",
@@ -15,16 +15,17 @@
     "LICENSE*"
   ],
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "seatbelt": "tsx src/cli.ts",
-    "test": "echo \"No tests yet\" && exit 0",
-    "prepare": "npm run build",
-    "prepublishOnly": "npm run build",
-    "reinstall": "npm run build && npm install -g ."
+    "test": "node --test test/**/*.test.js",
+    "test:unit": "npx tsx --test test/unit/**/*.test.ts",
+    "test:integration": "npx tsx --test test/integration/**/*.test.ts",
+    "prepare": "node -e \"const fs=require('fs'); if (fs.existsSync('node_modules/.bin/tsc') || fs.existsSync('node_modules/typescript')) { require('child_process').execSync('npm run build', {stdio:'inherit'}); } else { console.log('Skipping build (published package context or no dev deps)'); }\"",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "seatbelt",
@@ -45,6 +46,9 @@
   "license": "MIT",
   "dependencies": {
     "@earendil-works/pi-ai": "latest"
+  },
+  "overrides": {
+    "node-domexception": "^2.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

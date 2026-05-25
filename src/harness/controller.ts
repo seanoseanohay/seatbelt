@@ -47,9 +47,13 @@ export class HarnessController {
       this.filesInUnit.size >= 2 ||
       approxLines > 80;  // quick demo heuristic for large single writes (Task C style)
 
-    if (!shouldForce || this.correction.active) {
+    if (!shouldForce) {
       return 'continue';
     }
+
+    // If already in correction, we still want to re-evaluate the Auditor on new mutations
+    // so we can advance the correction iteration count or eventually hit max-corrections.
+    // We skip only the initial "should we review" decision.
 
     const isHighRisk = this.filesInUnit.has(filePath) && 
       ['manager', 'core', 'service', 'util'].some(p => filePath.toLowerCase().includes(p));
@@ -81,6 +85,16 @@ export class HarnessController {
 
     if (result.isClean) {
       this.resetUnit();
+
+      // If we were in correction and the current review is clean, exit correction.
+      // This allows a repair pass to successfully finish its targeted fixes.
+      if (this.correction.active) {
+        this.correction.active = false;
+        this.correction.violations = [];
+        this.correction.allowedFiles = new Set();
+        this.correction.iteration = 0;
+      }
+
       return 'continue';
     }
 

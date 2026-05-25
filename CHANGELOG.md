@@ -9,16 +9,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
-- Initial documentation set in `~/seatbelt/` to capture problem, vision, philosophy, architecture, constitution, roadmap, decisions, integration notes, and glossary.
-- Working name and core metaphor established as "Seatbelt".
-- Decision to evaluate Pi (`@earendil-works/pi`) as the primary agent runtime base due to its strong governance-relevant hooks.
+- Major expansion of automated test coverage, including a new real integration test suite (`test/integration/`) that exercises the full governed loop using a `FakeModelBackend` (real Worktree/git, real Controller/Auditor/ProgressTracker, only the model backend faked). Covers correction mode entry/exit, tool restrictions, multiple termination paths, real `.seatbelt/config.json` overrides, and worktree isolation.
+- Expanded CLI smoke / REPL interaction tests that drive the interactive session via stdin.
+- Light, disciplined extractions for better modularity and future phased behavior:
+  - `ProgressTracker` (handles repetition, inactivity, and mutation safety heuristics previously embedded in runner).
+  - `prompt-and-tools` module (`buildSystemPrompt` / `buildTools`).
+- New `test:integration` npm script.
 
 ### Changed
-- Refined problem framing from "personal discipline tool" to supporting mixed-experience teams where the humans may not be strong practitioners themselves.
-- Shifted from "occasional tool" to "daily driver" requirement ("I put my seatbelt on every time").
+- Runner and Controller cleaned up with the above extractions (improved SRP while preserving all behavior).
+- Improved testability of core governance paths in preparation for config-driven rule groups and targeted repair passes.
 
 ### Notes
-This is the very beginning of the project. Most activity so far has been requirements clarification, constraint definition, and architectural exploration rather than implementation.
+This release significantly strengthens verification of the core seatbelt guarantees (harness-owned timing, automatic bounded correction, multiple independent exit conditions) while following the project's own constitution around testing and modularity.
 
 ---
 

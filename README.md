@@ -10,28 +10,28 @@ The goal: type `seatbelt` anywhere and get the governed coding session.
 
 **Website**: [https://seanoseanohay.github.io/seatbelt](https://seanoseanohay.github.io/seatbelt)
 
-### Option 1: Fastest during development (recommended while iterating)
+### Standard install (recommended for everyone)
 
 ```bash
-cd /Users/lawrencekeener/seatbelt
-
-# One-liner using the convenience script we added
-./reinstall.sh
-
-# Or using npm script (same thing)
-npm run reinstall
+npm install -g @seanoseanohay/seatbelt
 ```
 
-This builds and does `npm install -g .` in one step.
+This is the normal, supported way to install Seatbelt.
 
-### Option 2: Standard global install (now auto-builds)
+### For contributors / local development
+
+If you have cloned the source repository:
 
 ```bash
-cd /Users/lawrencekeener/seatbelt
-npm install -g .
+cd path/to/seatbelt-repo
+npm run build && npm install -g .
 ```
 
-Thanks to the `prepare` script, this **automatically runs the build** for you.
+Or use the helper script:
+
+```bash
+./install.sh
+```
 
 After either method above, you can use the command from anywhere:
 
@@ -46,7 +46,8 @@ seatbelt --worktree /other/path "task"
 ### Option 3: Publish to npm (for others / permanent)
 
 ```bash
-cd /Users/lawrencekeener/seatbelt
+# cd into the directory where you cloned the seatbelt repository
+cd path/to/seatbelt
 npm publish
 ```
 

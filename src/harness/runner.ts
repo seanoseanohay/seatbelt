@@ -2,6 +2,8 @@ import { HarnessController } from './controller.js';
 import { Worktree } from './worktree.js';
 import { Auditor } from './auditor.js';
 import { loadConfig } from '../config.js';
+import { buildSystemPrompt, buildTools } from './prompt-and-tools.js';
+import { ProgressTracker } from './progress-tracker.js';
 import type { ModelBackend } from '../backends/types.js';
 
 /**
@@ -13,7 +15,7 @@ export class SeatbeltRunner {
   private worktree: Worktree;
   private backend?: ModelBackend;
   private task: string;
-  private consecutiveNoToolCalls = 0;
+  private progress = new ProgressTracker();
 
   constructor(task: string, worktreePath: string, backend?: ModelBackend) {
     this.task = task;
@@ -47,22 +49,10 @@ export class SeatbeltRunner {
     await this.worktree.writeFile(filePath, content);
     console.log(`[Seatbelt] Model wrote ${filePath} (${content.split('\n').length} lines)`);
 
-    // Populate real file contents for the Auditor (closes the long-standing TODO).
-    // This makes SRP, god-function, export-count, and mixed-concerns rules actually run on real code.
-    const fileContents = new Map<string, string>();
-    fileContents.set(filePath, content); // we have the authoritative new content for the file just mutated
+    // Delegate repetition and progress tracking to the dedicated tracker
+    this.progress.recordMutation(filePath, content);
 
-    // Read any other files already in the current unit from the worktree (fresh on-disk state)
-    // Note: controller will add the current file inside afterMutation; we proactively include it above.
-    // For a more complete unit view we could track, but reading the one we have + previous on-disk is sufficient
-    // and cheap for the narrow vertical slice.
-    try {
-      // Best-effort: if the controller has prior files (we don't have direct access), the next mutation
-      // that triggers review will have accumulated the just-written contents from prior turns.
-      // For the common case (single file or the triggering write), the map above is what matters.
-      // To make multi-file units see all current content, we read everything we can cheaply.
-      // For v1 we keep it simple: the mutated file is always fresh; auditor gracefully skips missing entries.
-    } catch {}
+    const fileContents = this.buildFileContentsForMutation(filePath, content);
 
     const result = await this.controller.afterMutation(filePath, content.split('\n').length, fileContents);
 
@@ -82,6 +72,23 @@ export class SeatbeltRunner {
     }
 
     return 'continue';
+  }
+
+  /**
+   * Builds the minimal file contents map for Auditor review on this mutation.
+   * Provides authoritative fresh content for the just-written file.
+   * Controller supplements from disk for any other files in the current unit.
+   *
+   * Extracted from onModelChange for SRP (runner orchestrates; this helper owns the
+   * population strategy) and to prepare seams for future richer strategies (e.g. full
+   * unit file tracking across turns for multi-file changes under config-driven phases).
+   */
+  private buildFileContentsForMutation(filePath: string, content: string): Map<string, string> {
+    const fileContents = new Map<string, string>();
+    fileContents.set(filePath, content);
+    // Note: no additional reads here currently (kept light). Controller performs best-effort
+    // disk reads for prior filesInUnit. This can evolve without touching the mutation path.
+    return fileContents;
   }
 
   get isInCorrection(): boolean {
@@ -104,14 +111,17 @@ export class SeatbeltRunner {
     for (let turn = 1; turn <= maxTurns; turn++) {
       console.log(`\n--- Turn ${turn} ---`);
 
+      // Let the progress tracker know time has passed (for inactivity detection)
+      this.progress.recordTimeAdvanced();
+
       const inCorrection = this.controller.isInCorrection();
       const allowedFiles = this.controller.getAllowedFiles();
 
       // Build tools based on current mode (this is key to restrictions)
-      const tools = this.buildTools(inCorrection, allowedFiles);
+      const tools = buildTools(inCorrection, allowedFiles);
 
       // Build the system prompt (harness-owned rules + correction instructions if needed)
-      const systemPrompt = this.buildSystemPrompt(inCorrection, allowedFiles);
+      const systemPrompt = buildSystemPrompt(inCorrection, allowedFiles);
 
       const response = await this.backend.call({
         systemPrompt,
@@ -121,7 +131,7 @@ export class SeatbeltRunner {
       });
 
       if (response.toolCalls.length === 0) {
-        this.consecutiveNoToolCalls++;
+        this.progress.recordNoToolCall();
         console.log('[Seatbelt] Model produced no tool calls.');
 
         const text = (response.text || '').toLowerCase();
@@ -132,11 +142,16 @@ export class SeatbeltRunner {
           console.log('[Seatbelt] Hint: the model reported a read-only or restricted sandbox environment. File changes may not be possible in this invocation.');
         }
 
-        // Stronger completion detection
+        // Stronger completion detection (expanded for Codex-style language)
         const looksDone =
           text.includes('task complete') ||
           text.includes('finished the task') ||
           text.includes('i have completed') ||
+          text.includes('i have finished') ||
+          text.includes('no more changes') ||
+          text.includes('the task is complete') ||
+          text.includes('i am done') ||
+          text.includes('work is complete') ||
           (text.includes('done') && !this.controller.isInCorrection());
 
         if (looksDone && !this.controller.isInCorrection()) {
@@ -144,7 +159,7 @@ export class SeatbeltRunner {
           return;
         }
 
-        if (this.consecutiveNoToolCalls >= 3) {
+        if (this.progress.shouldExitDueToNoToolCalls()) {
           console.log('[Seatbelt] Model has produced no file changes for 3 consecutive turns.');
           if (sandboxHint) {
             console.log('[Seatbelt] This is very common when Codex is running in a read-only sandbox. The model cannot write files in this environment.');
@@ -155,13 +170,25 @@ export class SeatbeltRunner {
           return;
         }
 
+        // One-shot inactivity exit
+        if (this.progress.shouldExitDueToInactivityAfterWork()) {
+          console.log('[Seatbelt] One-shot mode: Model made changes but has been inactive for multiple turns. Considering task complete.');
+          return;
+        }
+
         // Give the model another turn
         console.log('[Seatbelt] No file changes this turn — continuing...');
         continue;
       }
 
       // We got tool calls — reset the no-op counter
-      this.consecutiveNoToolCalls = 0;
+      this.progress.recordToolCallsReceived();
+
+      // One-shot safety net: if we've done a lot of mutations without hitting correction, the task is probably complete
+      if (this.progress.shouldExitDueToTooManyMutationsWithoutCorrection() && !this.controller.isInCorrection()) {
+        console.log('[Seatbelt] One-shot safety: Several mutations completed with no new violations detected. Ending run.');
+        return;
+      }
 
       // Process tool calls through the harness
       for (const tc of response.toolCalls) {
@@ -177,6 +204,12 @@ export class SeatbeltRunner {
             console.log('[Seatbelt] Max correction iterations reached. Terminating.');
             return;
           }
+
+          // If the model is hammering the same file repeatedly in one-shot, cut it off early
+          if (this.progress.shouldExitDueToRepeatedSameFile() && !this.controller.isInCorrection()) {
+            console.log('[Seatbelt] One-shot safety: Model is repeatedly rewriting the same file with no progress. Stopping.');
+            return;
+          }
         }
       }
     }
@@ -184,88 +217,4 @@ export class SeatbeltRunner {
     console.log('[Seatbelt] Reached max turns.');
   }
 
-  private buildTools(inCorrection: boolean, allowedFiles: string[]) {
-    if (inCorrection) {
-      return [
-        {
-          name: 'edit',
-          description: 'Edit an existing file (only allowed on files from the current unit)',
-          parameters: {
-            type: 'object',
-            properties: {
-              path: { type: 'string' },
-              oldText: { type: 'string' },
-              newText: { type: 'string' },
-            },
-            required: ['path', 'oldText', 'newText'],
-          },
-        },
-      ];
-    }
-
-    return [
-      {
-        name: 'write',
-        description: 'Write content to a file',
-        parameters: {
-          type: 'object',
-          properties: {
-            path: { type: 'string' },
-            content: { type: 'string' },
-          },
-          required: ['path', 'content'],
-        },
-      },
-      {
-        name: 'edit',
-        description: 'Edit an existing file',
-        parameters: {
-          type: 'object',
-          properties: {
-            path: { type: 'string' },
-            oldText: { type: 'string' },
-            newText: { type: 'string' },
-          },
-          required: ['path', 'oldText', 'newText'],
-        },
-      },
-    ];
-  }
-
-  private buildSystemPrompt(inCorrection: boolean, allowedFiles: string[]): string {
-    const baseRules = `You are operating under strict constitutional governance (Seatbelt harness).
-The harness (not you) owns all review and promotion decisions.
-
-Core rules (non-negotiable):
-- Make the smallest possible focused change.
-- Never create god functions or god files.
-- Do not accrete unrelated behavior into existing files.
-- The harness (not you) decides when work is clean.
-
-You do NOT get to decide when a unit of work is complete. The harness will evaluate your changes after every mutation.`;
-
-    if (inCorrection) {
-      return `${baseRules}
-
-You are currently in STRICT CORRECTION MODE.
-
-You MUST ONLY fix the following violations. Do not add new features or make unrelated improvements.
-
-RESTRICTIONS:
-- You may ONLY use the 'edit' tool.
-- You may ONLY edit these files: ${allowedFiles.join(', ')}
-- No new files allowed.
-- Keep changes minimal and targeted.
-
-After making the required fixes, stop. The harness will re-evaluate.`;
-    }
-
-    return `${baseRules}
-
-Available tools: write and edit.
-
-When you use tools, the harness will automatically review the changes according to its rules.
-
-Important: Once you believe you have completed the requested task to a reasonable degree, stop using tools. Do not call review_unit or declare completion yourself — the harness will evaluate your work.`;
-  }
 }

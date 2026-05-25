@@ -64,14 +64,15 @@ async function getVersion(): Promise<string> {
   for (const p of candidates) {
     try {
       const pkg = JSON.parse(await readFile(p, 'utf-8'));
-      if (pkg.name === 'seatbelt' && pkg.version) {
+      // Accept both unscoped name (dev) and our scoped published name
+      if ((pkg.name === 'seatbelt' || pkg.name === '@seanoseanohay/seatbelt') && pkg.version) {
         return pkg.version;
       }
       if (pkg.version) return pkg.version;
     } catch {}
   }
 
-  return '0.1.0';
+  return '0.3.3';  // Fallback to current known version
 }
 
 function printHelp(version: string) {
@@ -121,7 +122,8 @@ async function runOneShot(task: string, backend: CodexCliBackend, version: strin
   const agent = worktreeOverride
     ? new SeatbeltAgent(task, backend, worktreeOverride)
     : new SeatbeltAgent(task, backend);
-  await agent.start();
+  // One-shot mode should be more aggressive about terminating than interactive sessions
+  await agent.start(8);  // Conservative cap for one-shot to avoid excessive rewriting loops
 
   console.log('\n[Seatbelt] One-shot governed session complete.');
   console.log('Files (if any) are in the isolated worktree printed above.');
