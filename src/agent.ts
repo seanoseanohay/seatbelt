@@ -91,6 +91,15 @@ export class SeatbeltAgent {
   }
 
   /**
+   * Returns the rule groups that are currently active/enforced.
+   * Useful for UX (e.g. /rules command) and observability.
+   */
+  getActiveRuleGroups(): string[] {
+    // Runner may not have initialized the scope yet in all paths; fall back gracefully.
+    return (this.runner as any).getActiveRuleGroups?.() ?? ['smallFocusedChanges', 'avoidGodFiles', 'highRiskAccretion'];
+  }
+
+  /**
    * Starts a targeted repair pass for only the specified rule groups.
    * This is the first-class API for scoped repair.
    */
@@ -111,8 +120,8 @@ export class SeatbeltAgent {
 
     this.sessionStarted = true;
 
-    // Set the scope before running. Runner owns the repairScope so initialize() can wire it
-    // into the fresh Auditor/CombinedRuleScope (and Controller correction state).
+    // Set the scope before running. Runner owns the ConstitutionalScope (the single source of truth).
+    // This ensures initialize() and all subsequent prompt/Auditor decisions use the narrow scope.
     this.runner.setRepairScope(ruleGroups);
 
     await this.runner.runWithBackend(maxTurns);

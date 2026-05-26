@@ -25,6 +25,34 @@ This release significantly strengthens verification of the core seatbelt guarant
 
 ---
 
+## [0.3.6] - 2026-05-25
+
+### Added
+- `ConstitutionalScope` — single authoritative owner for active constitutional rule groups (replaces scattered `CombinedRuleScope` + `repairScope` strings). Enables future UI-driven scope changes and cleaner targeted repair flows.
+- Dedicated unit tests for `ConstitutionalScope`.
+- Significant REPL / interactive session UX improvements focused on **Correction Mode**:
+  - Much more scannable, boxed `ENTERING CORRECTION` announcement that includes currently active rule groups.
+  - Persistent `[correction]>` prompt that stays across user turns while in correction (with automatic reminder line).
+  - Clear "Correction resolved" success messaging when a burst brings the work back into compliance.
+  - Enhanced `/status` command that shows iteration, allowed files, violation summary, and mode when in correction.
+  - All REPL commands now correctly preserve correction prompt state.
+- Living plan document for ongoing Correction Mode UX work (`notes/correction-mode-ux-plan.md`).
+
+### Changed
+- `runner.ts` now uses `ConstitutionalScope` when announcing correction entry.
+- Interactive REPL in `cli.ts` tracks and respects correction state across bursts.
+- Minor supporting cleanups in Controller / prompt generation to favor the new scope owner.
+
+### Verified
+- `npm run build` clean.
+- 55/55 unit tests passing (including new ConstitutionalScope tests + all existing scope/repair behavior tests).
+- 12/12 integration tests passing (real worktree flows with correction entry/exit).
+
+### Notes
+This release focuses on making the "seatbelt catching you" moment (correction) feel protective, clear, and usable in daily interactive sessions. All changes small, fully tested with real git worktrees, and build on the ConstitutionalScope seam introduced for future extensibility.
+
+---
+
 ## [0.3.5] - 2026-05-25
 
 ### Added

@@ -1,6 +1,6 @@
 import { Auditor } from './auditor.js';
 import { loadConfig } from '../config.js';
-import { CombinedRuleScope } from './rule-scope.js';
+import { ConstitutionalScope } from './constitutional-scope.js';
 import type { RuleScope } from '../types/index.js';
 import {
   ReviewContext,
@@ -148,16 +148,18 @@ export class HarnessController {
     this.correction.repairScope = groups;
 
     // Update the Auditor so enforcement stays consistent with the new targeted scope.
-    // The Auditor exposes setRuleScope for exactly this dynamic repair-scope handoff.
+    // We now delegate to ConstitutionalScope (the single owner) instead of manually
+    // constructing CombinedRuleScope with a dummy global.
     if (this.auditor) {
-      // Narrow scope for the repair pass (only the groups explicitly requested).
-      // Later, when we have a proper ConstitutionalScope state machine, this will
-      // become: const newScope = this.constitutionalScope.getCurrentScope();
-      const newScope: RuleScope = new CombinedRuleScope(
-        { smallFocusedChanges: false, avoidGodFiles: false, highRiskAccretion: false },
-        groups
-      );
-      this.auditor.setRuleScope(newScope);
+      const scope = new ConstitutionalScope({
+        smallFocusedChanges: false,
+        avoidGodFiles: false,
+        highRiskAccretion: false,
+      });
+      if (groups && groups.length > 0) {
+        scope.enterRepairFor(groups);
+      }
+      this.auditor.setRuleScope(scope.asRuleScope());
     }
   }
 

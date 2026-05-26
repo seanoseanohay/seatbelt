@@ -1,6 +1,5 @@
 import type { SeatbeltConfig } from '../config.js';
 import type { Violation, RuleScope } from '../types/index.js';
-import { CombinedRuleScope } from './rule-scope.js';
 
 /**
  * Builds the system prompt based on current mode and configuration.
@@ -56,8 +55,9 @@ ${allPrinciples.map(p => `- ${p}`).join('\n')}
 When in doubt, make a smaller change than you think is necessary.`;
 
   if (inCorrection) {
-    // Determine active rule groups.
-    // Priority: explicit RuleScope > repairScope (for transition) > global config.rules
+    // Determine active rule groups for the TARGETED REPAIR CONTEXT section.
+    // Preferred: the injected RuleScope (now backed by ConstitutionalScope in the runner).
+    // Fallbacks kept temporarily for tests and older call sites.
     let activeRules: string[];
     if (ruleScope) {
       activeRules = ['smallFocusedChanges', 'avoidGodFiles', 'highRiskAccretion'].filter(g => 

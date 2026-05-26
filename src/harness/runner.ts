@@ -2,7 +2,7 @@ import { HarnessController } from './controller.js';
 import { Worktree } from './worktree.js';
 import { Auditor } from './auditor.js';
 import { loadConfig, DEFAULT_CONFIG, type SeatbeltConfig } from '../config.js';
-import { CombinedRuleScope } from './rule-scope.js';
+import { ConstitutionalScope, createConstitutionalScope } from './constitutional-scope.js';
 import { buildSystemPrompt, buildTools } from './prompt-and-tools.js';
 import { ProgressTracker } from './progress-tracker.js';
 import type { ModelBackend } from '../backends/types.js';
@@ -18,14 +18,25 @@ export class SeatbeltRunner {
   private task: string;
   private progress = new ProgressTracker();
   private config: Required<SeatbeltConfig> = DEFAULT_CONFIG; // will be overwritten in initialize()
-  /** Current or pending explicit repair scope (for targeted repair passes via startRepairForRules). */
-  private repairScope?: string[];
+
+  /**
+   * The single source of truth for which constitutional rule groups are currently active.
+   * Owned here; passed (via asRuleScope()) to Auditor and prompt generation.
+   */
+  private constitutionalScope: ConstitutionalScope;
+
+  /**
+   * Desired narrow repair scope that should survive initialize() recreating the constitutionalScope.
+   * Set by startRepairForRules / setRepairScope before or during a run.
+   */
+  private desiredRepairScope?: string[];
 
   constructor(task: string, worktreePath: string, backend?: ModelBackend) {
     this.task = task;
     this.worktree = new Worktree(worktreePath);
     this.controller = new HarnessController({ worktree: worktreePath });
-    // Note: ruleScope (and repairScope if set via startRepairForRules before run) will be applied in initialize()
+    // Start with default all-rules scope; initialize() will replace with config-driven one.
+    this.constitutionalScope = createConstitutionalScope(DEFAULT_CONFIG.rules);
     this.backend = backend;
   }
 
@@ -36,32 +47,27 @@ export class SeatbeltRunner {
     try {
       this.config = await loadConfig(this.worktree.path);
 
-      // Use runner's repairScope (if a targeted repair was requested before run) so the
-      // initial Auditor and its RuleScope are already narrowed. This is the clean handoff
-      // point that makes startRepairForRules work independently of global config.
-      const effectiveRepair = this.repairScope;
-      const ruleScope = new CombinedRuleScope(
-        this.config.rules,
-        effectiveRepair
-      );
+      // Create (or replace) the single ConstitutionalScope from the loaded config.
+      // This is now the authoritative owner of active rules.
+      this.constitutionalScope = createConstitutionalScope(this.config.rules);
 
-      // Recreate controller with configured auditor (this was the source of the old
-      // "set before init is lost" bug for repair scopes).
+      // Re-apply any desired repair scope that was set before or across initialize
+      // (e.g. startRepairForRules called before runWithBackend). This fixes the
+      // lifecycle issue where the scope instance was replaced.
+      if (this.desiredRepairScope && this.desiredRepairScope.length > 0) {
+        this.constitutionalScope.enterRepairFor(this.desiredRepairScope);
+      }
+
+      const ruleScopeForAuditor = this.constitutionalScope.asRuleScope();
+
       this.controller = new HarnessController(
         { worktree: this.worktree.path },
-        new Auditor(this.config, ruleScope)
+        new Auditor(this.config, ruleScopeForAuditor)
       );
-
-      // Re-apply so the *new* controller's correction state also carries the repairScope
-      // (used by prompt builder for TARGETED REPAIR CONTEXT and by getLastCorrectionState).
-      if (effectiveRepair && effectiveRepair.length > 0) {
-        this.controller.setRepairScope(effectiveRepair);
-      }
     } catch {
-      // fall back to defaults (already set in constructor)
+      // fall back to defaults
       this.config = DEFAULT_CONFIG;
-      // If a repairScope was set before run, the pre-init setRepairScope already
-      // applied it to the ctor's controller/auditor, so no further action needed here.
+      this.constitutionalScope = createConstitutionalScope(DEFAULT_CONFIG.rules);
     }
 
     console.log(`[Seatbelt] Worktree ready at ${this.worktree.path}`);
@@ -83,16 +89,43 @@ export class SeatbeltRunner {
 
     if (result === 'enter-correction') {
       const state = this.controller.getCorrectionState();
-      console.log(`\n[Seatbelt] ============================================`);
-      console.log(`[Seatbelt] ENTERING CORRECTION (iteration ${state.iteration})`);
-      console.log(`[Seatbelt] Violations: ${state.violations.map(v => v.message).join(' | ')}`);
-      console.log(`[Seatbelt] Allowed files: ${this.controller.getAllowedFiles().join(', ')}`);
-      console.log(`[Seatbelt] ============================================\n`);
+      const activeGroups = this.constitutionalScope.getActiveGroups();
+
+      console.log(`\n[Seatbelt] ╔════════════════════════════════════════════════════════════╗`);
+      console.log(`[Seatbelt] ║  ENTERING CORRECTION (iteration ${state.iteration})`.padEnd(60) + '║');
+      console.log(`[Seatbelt] ╠════════════════════════════════════════════════════════════╣`);
+
+      if (activeGroups.length > 0) {
+        console.log(`[Seatbelt] ║  Active rules: ${activeGroups.join(', ')}`.padEnd(60) + '║');
+      }
+
+      console.log(`[Seatbelt] ║  Violations detected:`);
+      state.violations.slice(0, 4).forEach((v, i) => {
+        let msg = `    ${i + 1}. [${v.ruleId}] ${v.message}`;
+        if (msg.length > 56) msg = msg.substring(0, 53) + '...';
+        console.log(`[Seatbelt] ║${msg.padEnd(58)}║`);
+      });
+      if (state.violations.length > 4) {
+        console.log(`[Seatbelt] ║    ... and ${state.violations.length - 4} more`.padEnd(60) + '║');
+      }
+
+      const allowed = this.controller.getAllowedFiles().join(', ');
+      console.log(`[Seatbelt] ║  Allowed files: ${allowed}`.padEnd(60) + '║');
+      console.log(`[Seatbelt] ║                                                            ║`);
+      console.log(`[Seatbelt] ║  The model is now restricted. Make only the minimal fixes  ║`);
+      console.log(`[Seatbelt] ║  needed to resolve the violations above.                   ║`);
+      console.log(`[Seatbelt] ╚════════════════════════════════════════════════════════════╝\n`);
+
       return 'correction';
     }
 
     if (result === 'max-corrections') {
-      console.log(`[Seatbelt] MAX CORRECTIONS REACHED`);
+      console.log(`\n[Seatbelt] ╔════════════════════════════════════════════════════════════╗`);
+      console.log(`[Seatbelt] ║  MAX CORRECTIONS REACHED                                   ║`);
+      console.log(`[Seatbelt] ║  The harness has exhausted its correction attempts.        ║`);
+      console.log(`[Seatbelt] ║  The current unit of work could not be brought into        ║`);
+      console.log(`[Seatbelt] ║  compliance with the active constitutional rules.          ║`);
+      console.log(`[Seatbelt] ╚════════════════════════════════════════════════════════════╝\n`);
       return 'max-corrections';
     }
 
@@ -121,6 +154,14 @@ export class SeatbeltRunner {
   }
 
   /**
+   * Returns the currently active constitutional rule groups.
+   * Backed by the ConstitutionalScope.
+   */
+  getActiveRuleGroups(): string[] {
+    return this.constitutionalScope.getActiveGroups();
+  }
+
+  /**
    * Test / observability hook.
    * Returns the most recent correction state (including the list of violations)
    * from the last time the Auditor ran.
@@ -138,8 +179,16 @@ export class SeatbeltRunner {
    * to the current controller/auditor if one exists.
    */
   setRepairScope(groups: string[]) {
-    this.repairScope = groups && groups.length > 0 ? groups.slice() : undefined;
+    this.desiredRepairScope = groups && groups.length > 0 ? groups.slice() : undefined;
+
+    if (this.desiredRepairScope) {
+      this.constitutionalScope.enterRepairFor(this.desiredRepairScope);
+    } else {
+      this.constitutionalScope.exitRepair();
+    }
+
     if (this.controller) {
+      // Keep the controller's correction state in sync for now (legacy path)
       this.controller.setRepairScope(groups);
     }
   }
@@ -172,20 +221,20 @@ export class SeatbeltRunner {
       // Build the system prompt (harness-owned rules + correction instructions if needed)
       const state = inCorrection ? this.controller.getCorrectionState() : null;
       const currentViolations = state?.violations ?? [];
-      const repairScope = state?.repairScope;
 
-      // Create a RuleScope that prefers explicit repairScope for targeted repair
-      const effectiveRuleScope = new CombinedRuleScope(
-        this.config.rules,
-        repairScope
-      );
+      // Use the single ConstitutionalScope as the source of truth for active rules
+      // (both for the prompt and for Auditor enforcement).
+      const effectiveRuleScope = this.constitutionalScope.asRuleScope();
+      const activeRepairGroups = this.constitutionalScope.isInRepairScope()
+        ? this.constitutionalScope.getActiveGroups().map(g => g as string)
+        : undefined;
 
       const systemPrompt = buildSystemPrompt(
         inCorrection, 
         allowedFiles, 
         this.config, 
         currentViolations, 
-        repairScope,
+        activeRepairGroups,
         effectiveRuleScope
       );
 

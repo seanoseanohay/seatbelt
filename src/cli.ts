@@ -134,6 +134,8 @@ async function runInteractiveSession(backend: CodexCliBackend, version: string, 
   const stableDefault = path.join(home, '.seatbelt', 'sessions', 'default');
   const sessionWorktree = worktreeOverride || stableDefault;
   let lastInstruction = '';
+  let inCorrectionMode = false;  // Persist correction prompt state across user turns
+  let lastCorrectionState: any = null;  // Captured at end of bursts for /status visibility
 
   // Ensure the stable location exists (Worktree will handle .git init on first use)
   try {
@@ -198,28 +200,43 @@ Type /help for commands, /exit to leave.
       console.log(`
 Commands:
   /help         Show this
-  /status       Current session worktree + last instruction
+  /status       Current session worktree + last instruction + correction state
   /violations   Reminder: violations are printed live during bursts
+  /rules        Show currently active constitutional rule groups
   /exit         Leave the session (worktree stays on disk)
 
-Just type a normal instruction to continue the governed work:
-  "create src/parser.ts with a small clean implementation"
-  "now add unit tests for it, but only in a new test/ file"
-  "refactor the big function out into focused helpers"
+Just type a normal instruction to continue the governed work.
 `);
+      updatePrompt(inCorrectionMode);
       rl.prompt();
       return;
     }
 
     if (line === '/status') {
-      console.log(`
+      let status = `
 [Seatbelt Status]
   Session worktree : ${sessionWorktree}
   Last instruction : ${lastInstruction || '(none yet)'}
   Backend          : Codex CLI (your subscription)
-  Governance       : active (harness-owned timing + correction)
-  Note             : Detailed correction state is shown live in burst logs.
-`);
+  Mode             : ${inCorrectionMode ? 'CORRECTION (restricted)' : 'Normal'}
+`;
+
+      if (inCorrectionMode && lastCorrectionState) {
+        const vs = lastCorrectionState.violations || [];
+        const allowed = (lastCorrectionState.allowedFiles || []).join(', ') || '(none)';
+        status += `  Correction iter  : ${lastCorrectionState.iteration || 1}\n`;
+        status += `  Active violations: ${vs.length}\n`;
+        status += `  Allowed files    : ${allowed}\n`;
+        if (vs.length > 0) {
+          status += `  Last violations  : ${vs.slice(0,2).map((v: any) => v.ruleId).join(', ')}\n`;
+        }
+      }
+
+      status += `  Governance       : active (harness-owned timing + correction)
+  Note             : Use /rules to see active constitutional groups.
+`;
+      console.log(status);
+      updatePrompt(inCorrectionMode);
       rl.prompt();
       return;
     }
@@ -234,6 +251,26 @@ evaluates changes during a burst. Look for lines like:
 Use /status for session info. The next instruction you type
 will be executed under the same governance rules.
 `);
+      updatePrompt(inCorrectionMode);
+      rl.prompt();
+      return;
+    }
+
+    if (line === '/rules') {
+      console.log(`
+[Seatbelt Active Rules (current session defaults)]
+  • Small focused changes
+  • Avoid god files/functions
+  • High-risk accretion
+
+These are the constitutional rule groups enforced by default.
+During a targeted repair pass (startRepairForRules), only the requested
+subset will be active.
+
+Violations and prompts are filtered to the active groups.
+See the .seatbelt/config.json in your worktree to disable groups globally.
+`);
+      updatePrompt(inCorrectionMode);
       rl.prompt();
       return;
     }
@@ -242,17 +279,41 @@ will be executed under the same governance rules.
     lastInstruction = line;
     console.log(`\n[Seatbelt] Governed burst for: ${line}\n`);
 
+    let endedInCorrection = false;
     try {
       const agent = new SeatbeltAgent(line, backend, sessionWorktree);
       // quiet so we don't spam repeated banners inside the REPL
       await agent.start(12, { quiet: true });
+      endedInCorrection = agent.isInCorrection();
+      if (endedInCorrection) {
+        lastCorrectionState = agent.getLastCorrectionState();
+      } else {
+        lastCorrectionState = null;
+      }
     } catch (err: any) {
       console.error('[Seatbelt] Burst error:', err?.message || err);
+      lastCorrectionState = null;
     }
 
+    const wasInCorrection = inCorrectionMode;
+    inCorrectionMode = endedInCorrection;
+
     console.log('\n[Seatbelt] Burst complete. Ready for next instruction.');
+
+    if (wasInCorrection && !inCorrectionMode) {
+      console.log(`[Seatbelt] ✓ Correction resolved — back to normal mode.`);
+    } else if (inCorrectionMode) {
+      console.log(`[Seatbelt] ⚠ Still in CORRECTION mode — restricted to edit on allowed files only.`);
+    }
+
     console.log(`[Seatbelt] Session worktree: ${sessionWorktree}\n`);
-    updatePrompt(false);
+
+    updatePrompt(inCorrectionMode);
+
+    if (inCorrectionMode) {
+      console.log('[Seatbelt] (Correction active — use only edit on allowed files. Type /status for details.)');
+    }
+
     rl.prompt();
   });
 
